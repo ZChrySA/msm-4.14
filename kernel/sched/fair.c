@@ -4794,7 +4794,7 @@ static const u64 cfs_bandwidth_slack_period = 5 * NSEC_PER_MSEC;
 static int runtime_refresh_within(struct cfs_bandwidth *cfs_b, u64 min_expire)
 {
 	struct hrtimer *refresh_timer = &cfs_b->period_timer;
-	u64 remaining;
+	s64 remaining;
 
 	/* if the call-back is running a quota refresh is already occurring */
 	if (hrtimer_callback_running(refresh_timer))
@@ -4802,7 +4802,7 @@ static int runtime_refresh_within(struct cfs_bandwidth *cfs_b, u64 min_expire)
 
 	/* is a quota refresh about to occur? */
 	remaining = ktime_to_ns(hrtimer_expires_remaining(refresh_timer));
-	if (remaining < min_expire)
+	if (remaining < (s64)min_expire)
 		return 1;
 
 	return 0;
@@ -7929,8 +7929,16 @@ DEFINE_PER_CPU(struct energy_env, eenv_cache);
 #ifdef DEBUG_EENV_DECISIONS
 static inline int eenv_debug_size_per_dbg_entry(void)
 {
-	return sizeof(struct _eenv_debug) + (sizeof(unsigned long) * num_possible_cpus());
-}
+	struct cpumask *cpus = this_cpu_cpumask_var_ptr(select_idle_mask);
+	struct sched_domain *this_sd;
+	u64 avg_cost, avg_idle;
+	u64 time, cost;
+	s64 delta;
+	int cpu, nr = INT_MAX;
+
+	this_sd = rcu_dereference(*this_cpu_ptr(&sd_llc));
+	if (!this_sd)
+		return -1;
 
 static inline int eenv_debug_size_per_cpu_entry(void)
 {
@@ -7969,13 +7977,13 @@ static inline void alloc_eenv(void)
 	int cpu;
 	int cpu_count = num_possible_cpus();
 
-	for_each_possible_cpu(cpu) {
-		struct energy_env *eenv = &per_cpu(eenv_cache, cpu);
-		eenv->cpu = kmalloc(sizeof(struct eenv_cpu) * cpu_count, GFP_KERNEL);
-		eenv->eenv_cpu_count = cpu_count;
-#ifdef DEBUG_EENV_DECISIONS
-		eenv->debug = (struct _eenv_debug *)kmalloc(eenv_debug_size(), GFP_KERNEL);
-#endif
+	cpumask_and(cpus, sched_domain_span(sd), &p->cpus_allowed);
+
+	for_each_cpu_wrap(cpu, cpus, target) {
+		if (!--nr)
+			return -1;
+		if (idle_cpu(cpu))
+			break;
 	}
 }
 
